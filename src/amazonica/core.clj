@@ -17,6 +17,7 @@
            [com.amazonaws.regions
              Region
              Regions]
+           com.amazonaws.services.cloudsearchdomain.AmazonCloudSearchDomainClient
            [com.amazonaws.services.s3
              AmazonS3Client
              AmazonS3EncryptionClient]
@@ -98,8 +99,7 @@
 (def ^:private excluded
   #{:invoke
     :init
-    ; cloudsearchdomain needs this
-    ;:set-endpoint
+    :set-endpoint
     :get-cached-response-metadata
     :get-service-abbreviation})
     ; addRequestHandler???
@@ -177,7 +177,8 @@
   "Legacy support means credentials may or may not be passed
    as the first argument."
   [cred args]
-  (if (and (instance? DefaultAWSCredentialsProviderChain (get-credentials cred))
+  (if (and (instance? AWSCredentialsProvider (get-credentials cred))
+           (not (instance? AWSCredentialsProvider cred))
            (nil? (:endpoint cred)))
     {:args (conj args cred)}
     {:args args :cred cred}))
@@ -359,7 +360,10 @@
           %
           nil)
         ctors)
-      (first ctors))))
+      (first (sort-by
+               (fn [ctor]
+                 (some aws-package? (.getParameterTypes ctor)))
+               ctors)))))
 
 (defn- new-instance
   "Create a new instance of a Java bean. S3 neccessitates
@@ -435,7 +439,7 @@
 (defn- find-methods
   [pojo k & v]
   (-> (.getClass pojo)
-      (.getDeclaredMethods)
+      (.getMethods)
       (accessor-methods
         (.toLowerCase (keyword->camel k))
         (empty? v))))
@@ -637,16 +641,17 @@
 (defn- use-aws-request-bean?
   [method args]
   (let [types (.getParameterTypes method)]
-    (and (< 1 (count args))
+    (and (or (map? args) (< 1 (count args)))
          (< 0 (count types))
-         (and
-            (or (and
-                  (even? (count args))
-                  (not= java.io.File (last types)))
-                (and
-                  (odd? (count args))
-                  (= java.io.File (last types)))) ; s3 getObject() support
-            (some keyword? args))
+         (or (map? args)
+             (and
+                (or (and
+                      (even? (count args))
+                      (not= java.io.File (last types)))
+                    (and
+                      (odd? (count args))
+                      (= java.io.File (last types)))) ; s3 getObject() support
+                (some keyword? args)))
          (or (aws-package? (first types))
              (and (aws-package? (last types))
                   (not (< (count types) (count args))))))))
@@ -701,28 +706,34 @@
       {:args (if (-> args rest first map?)
                  (mapcat identity (-> args rest args-from :args))
                  (rest args))
-       :credential (dissoc (first args) :client-config)
+       :credential (if (map? (first args))
+                       (dissoc (first args) :client-config)
+                       (first args))
        :client-config (:client-config (first args))}
       (map? (first args))
-      {:args (mapcat identity (first args))}
+      {:args (let [m (mapcat identity (first args))]
+               (if (seq m) m {}))}
       :default {:args args})))
 
 (defn- candidate-client
   [clazz args]
-  (if (and (or (= clazz AmazonS3Client)
-               (= clazz TransferManager))
-           (even? (count (:args args)))
-           (contains? (apply hash-map (:args args)) :encryption))
-      (if (= clazz TransferManager)
-          (TransferManager. (candidate-client AmazonS3Client args))
-          (encryption-client (:encryption (apply hash-map (:args args)))
+  (let [credential (if (map? (:credential args))
                              (merge @credential (:credential args))
-                                 (:client-config args)))
-      (if (= clazz TransferManager)
-          (TransferManager. (candidate-client AmazonS3Client args))
-          (amazon-client clazz
-                         (merge @credential (:credential args))
-                         (:client-config args)))))
+                             (or (:credential args) @credential))]
+    (if (and (or (= clazz AmazonS3Client)
+                 (= clazz TransferManager))
+             (even? (count (:args args)))
+             (contains? (apply hash-map (:args args)) :encryption))
+        (if (= clazz TransferManager)
+            (TransferManager. (candidate-client AmazonS3Client args))
+            (encryption-client (:encryption (apply hash-map (:args args)))
+                               credential
+                               (:client-config args)))
+        (if (= clazz TransferManager)
+            (TransferManager. (candidate-client AmazonS3Client args))
+            (amazon-client clazz
+                           credential
+                           (:client-config args))))))
 
 (defn- fn-call
   "Returns a function that reflectively invokes method on
@@ -803,11 +814,12 @@
   (reduce
     (fn [col method]
       (let [fname (camel->keyword (.getName method))]
-        (if (contains? excluded fname)
-          col
-          (if (contains? col fname)
-            (update-in col [fname] conj method)
-            (assoc col fname [method])))))
+        (if (and (contains? excluded fname)
+                 (not= client AmazonCloudSearchDomainClient))
+            col
+            (if (contains? col fname)
+                (update-in col [fname] conj method)
+                (assoc col fname [method])))))
     {}
     (.getDeclaredMethods client)))
 

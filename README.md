@@ -7,7 +7,7 @@ A comprehensive Clojure client for the entire [Amazon AWS api] [1].
 
 Leiningen coordinates:
 ```clj
-[amazonica "0.3.4"]
+[amazonica "0.3.13"]
 ```
 
 For Maven users:
@@ -26,7 +26,7 @@ and the following dependency:
 <dependency>
   <groupId>amazonica</groupId>
   <artifactId>amazonica</artifactId>
-  <version>0.3.4</version>
+  <version>0.3.13</version>
 </dependency>
 ```
 
@@ -37,6 +37,7 @@ and the following dependency:
 * [CloudSearch] (#cloudsearch)
 * [CloudSearchV2] (#cloudsearchv2)
 * [CloudWatch] (#cloudwatch)
+* [CodeDeploy] (#codedeploy)
 * [DataPipeline] (#datapipeline)
 * DirectConnect
 * [DynamoDBV2] (#dynamodbv2)
@@ -49,6 +50,7 @@ and the following dependency:
 * [IdentityManagement] (#identitymanagement)
 * [Kinesis] (#kinesis)
 * [KMS] (#kms)
+* [Lambda] (#lambda)
 * [OpsWorks] (#opsworks)
 * RDS
 * [Redshift] (#redshift)
@@ -319,6 +321,19 @@ All functions throw `com.amazonaws.AmazonServiceExceptions`. If you wish to catc
 ;   at com.amazonaws.services.ec2.AmazonEC2Client.createSnapshot(AmazonEC2Client.java:1531)
 ;   .....
 ```
+
+
+### Running the tests
+As always, `lein test` will run all the tests. Note that some of the namespaces require the file `~/.aws/credentials` to be present and be of the same form as required by the official AWS tools:
+
+```
+[default]
+aws_access_key_id = AKIAABCDEFGHIEJK
+aws_secret_access_key = 6rqzvpAbcd1234++zyx987WUV654sRq
+```
+
+
+
 ### Performance
 Amazonica uses reflection extensively, to generate the public Vars, to set the bean properties passed as arguments to those functions, and to invoke the actual service method calls on the underlying AWS Client class. As such, one may wonder if such pervasive use of reflection will result in unacceptable performance. In general, this shouldn't be an issue, as the cost of reflection should be relatively minimal compared to the latency incurred by making a remote call across the network. Furthermore, typical AWS usage is not going to be terribly concerned with performance, except with specific services such as DynamoDB, RDS, SimpleDB, or SQS. But we have done some basic benchmarking against the excellent DynamoDB [rotary] [13] library, which uses no explicit reflection. Results are shown below. Benchmarking code is available at [https://github.com/mcohen01/amazonica-benchmark] [12]
 
@@ -450,6 +465,17 @@ Amazonica uses reflection extensively, to generate the public Vars, to set the b
                   :threshold "50%")
 
 ```
+
+
+###CodeDeploy
+```clj
+(ns com.example
+  (:use [amazonica.aws.codedeploy]))
+
+(list-applications)
+
+```
+
 
 ###DataPipeline
 ```clj
@@ -620,9 +646,10 @@ Amazonica uses reflection extensively, to generate the public Vars, to set the b
 ```
 
 ###ElasticBeanstalk
+
 ```clj
 (ns com.example
-  (:use [amazonica.aws.elastibeanstalk]))
+  (:use [amazonica.aws.elasticbeanstalk]))
 
 (describe-applications)
 
@@ -831,6 +858,27 @@ Amazonica uses reflection extensively, to generate the public Vars, to set the b
 
 (disable-key "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
 ```
+
+
+###Lambda
+```clj
+(ns com.example
+  (:use [amazonica.aws.lambda]))
+
+(let [role "arn:aws:iam::123456789012:role/some-lambda-role"
+      handler "exports.helloWorld = function(event, context) {
+                  console.log('value1 = ' + event.key1)
+                  console.log('value2 = ' + event.key2)
+                  console.log('value3 = ' + event.key3)
+                  context.done(null, 'Hello World')
+                }"]
+  (upload-function :role role :function handler))
+
+(invoke-async :function-name "helloWorld"
+              :invoke-args "{\"key1\": 1, \"key2\": 2, \"key3\": 3}")  
+
+```
+
 
 ###OpsWorks
 ```clj

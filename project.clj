@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 (defproject amazonica "0.3.4-IZ"
+=======
+(defproject amazonica "0.3.13"
+>>>>>>> upstream/master
   :description "A comprehensive Clojure client for the entire Amazon AWS api."
   :url "https://github.com/mcohen01/amazonica"
   :license {:name "Eclipse Public License"
@@ -14,4 +18,4 @@
                  [com.amazonaws/amazon-kinesis-client "1.1.0" :exclusions [joda-time]]
                  [joda-time "2.2"]
                  [robert/hooke "1.3.0"]
-                 [com.taoensso/nippy "2.5.0"]])
+                 [com.taoensso/nippy "2.7.0"]])
