@@ -524,7 +524,7 @@
       (f (unmarshall types v))
       (if (instance? generic v)
         (f v)
-        (f (coerce-value v generic))))))
+        (try (f (coerce-value v generic)) (catch Exception e false))))))
 
 (defn set-fields
   "Returns the populated AWS *Request bean with 'args' as
