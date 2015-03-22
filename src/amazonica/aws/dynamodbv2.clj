@@ -1,7 +1,7 @@
 (ns amazonica.aws.dynamodbv2
   "Amazon DyanmoDBV2 support - Local Secondary Indexes"
-  (:use [amazonica.core :only (accessors coerce-value marshall
-                               register-coercions set-fields IMarshall)]
+  (:use [amazonica.core :only (accessors coerce-value intern-function marshall
+                               register-coercions set-client set-fields IMarshall)]
         [clojure.algo.generic.functor :only (fmap)])
   (:import [com.amazonaws.services.dynamodbv2
               AmazonDynamoDBAsyncClient
@@ -20,7 +20,7 @@
 (extend-protocol IMarshall
   AttributeValue
   (marshall [obj]
-    (let [[type val] (some #(when (val %) %) (dissoc (bean obj) :class))]
+    (let [[type val] (some #(when (not (nil? (val %))) %) (dissoc (bean obj) :class))]
       (marshall (case type
                   (:s :b :BOOL) val
                   (:SS :BS) (into #{} val)
@@ -32,13 +32,13 @@
 
 (def ^:private byte-array-type (class (byte-array 0)))
 
-(defn- name-of-first-key [value]
-  (name (key (first value))))
+(defn- first-key [value]
+  (key (first value)))
 
 (defn- scalar-attribute-value? [value]
   (and (map? value)
        (= 1 (count value))
-       (= 1 (count (name-of-first-key value)))))
+       (contains? #{:s :b :BOOL :SS :BS :n :NS :l :m :NULL} (first-key value))))
 
 (register-coercions
   AttributeValue
@@ -88,4 +88,8 @@
             (.setWriteCapacityUnits pt (last value)))))
       pt)))
 
-(amazonica.core/set-client AmazonDynamoDBClient *ns*)
+(->> (.getMethods AmazonDynamoDBClient)
+     (filter #(= "setSignerRegionOverride" (.getName %)))
+     (intern-function AmazonDynamoDBClient *ns* :set-signer-region-override))
+
+(set-client AmazonDynamoDBClient *ns*)
