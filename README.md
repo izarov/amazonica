@@ -7,7 +7,7 @@ A comprehensive Clojure client for the entire [Amazon AWS api] [1].
 
 Leiningen coordinates:
 ```clj
-[amazonica "0.3.24"]
+[amazonica "0.3.34"]
 ```
 
 For Maven users:
@@ -26,7 +26,7 @@ and the following dependency:
 <dependency>
   <groupId>amazonica</groupId>
   <artifactId>amazonica</artifactId>
-  <version>0.3.24</version>
+  <version>0.3.34</version>
 </dependency>
 ```
 
@@ -37,14 +37,20 @@ and the following dependency:
 * [CloudSearch] (#cloudsearch)
 * [CloudSearchV2] (#cloudsearchv2)
 * [CloudWatch] (#cloudwatch)
+* CodeCommit
 * [CodeDeploy] (#codedeploy)
+* CodePipeline
+* Config
 * [DataPipeline] (#datapipeline)
+* DeviceFarm
 * DirectConnect
+* Directory
 * [DynamoDBV2] (#dynamodbv2)
 * [EC2] (#ec2)
 * [ECS] (#ecs)
 * [ElastiCache] (#elasticache)
 * [ElasticBeanstalk] (#elasticbeanstalk)
+* ElasticFileSystem
 * [ElasticLoadBalancing] (#elasticloadbalancing)
 * [ElasticMapReduce] (#elasticmapreduce)
 * [Glacier] (#glacier)
@@ -52,6 +58,7 @@ and the following dependency:
 * [Kinesis] (#kinesis)
 * [KMS] (#kms)
 * [Lambda] (#lambda)
+* MachineLearning
 * [OpsWorks] (#opsworks)
 * RDS
 * [Redshift] (#redshift)
@@ -84,7 +91,7 @@ Reflection is used to create idiomatically named Clojure Vars in the library nam
 (create-snapshot :volume-id "vol-8a4857fa"
                  :description "my_new_snapshot")
 ```
-which delegates to the [createSnapshot()] [3] method of AmazonEC2Client. If the Java method on the Amazon*Client takes a parameter, such as [CreateSnapshotRequest] [4] in this case, the bean properties exposed via mutators of the form set* can be supplied as key-value pairs passed as arguments to the Clojure function.
+which delegates to the [createSnapshot()] [3] method of AmazonEC2Client. If the Java method on the Amazon\*Client takes a parameter, such as [CreateSnapshotRequest] [4] in this case, the bean properties exposed via mutators of the form set\* can be supplied as key-value pairs passed as arguments to the Clojure function.
 
 All of the AWS Java apis (except S3) follow this pattern, either having a single implementation method which takes an AWS Java bean as its only argument, or being overloaded and having a no-arg implementation. The corresponding Clojure function will either require key-value pairs as arguments, or be variadic and allow a no-arg invocation.
 
@@ -488,6 +495,15 @@ Amazonica uses reflection extensively, to generate the public Vars, to set the b
 
 ```
 
+To put metric data.   [UnitTypes](http://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/API_MetricDatum.html)
+```clj
+(cloudwatch/put-metric-data
+    {:endpoint "us-west-1"} ;; Defaults to us-east-1
+    :namespace "test_namespace"
+    :metric-data [{:metric-name "test_metric"
+                   :unit "Count"
+                   :value 1.0}])
+```
 
 ###CodeDeploy
 ```clj
@@ -497,7 +513,6 @@ Amazonica uses reflection extensively, to generate the public Vars, to set the b
 (list-applications)
 
 ```
-
 
 ###DataPipeline
 ```clj
@@ -662,7 +677,7 @@ Amazonica uses reflection extensively, to generate the public Vars, to set the b
 (describe-task-definition :task-definition "grafana2")
 (list-task-definitions :family-prefix "grafana2")
 
-;; create cluster 
+;; create cluster
 (create-cluster :cluster-name "Amazonica")
 
 (list-clusters)
@@ -940,7 +955,7 @@ Amazonica uses reflection extensively, to generate the public Vars, to set the b
                   console.log('value3 = ' + event.key3)
                   context.done(null, 'Hello World')
                 }"]
-  (upload-function :role role :function handler))
+  (create-function :role role :function handler))
 
 (invoke-async :function-name "helloWorld"
               :invoke-args "{\"key1\": 1, \"key2\": 2, \"key3\": 3}")
@@ -1020,7 +1035,8 @@ Amazonica uses reflection extensively, to generate the public Vars, to set the b
 
 (get-health-check :health-check-id "ce6a4aeb-acf1-4923-a116-cd9ae2c30ee3")
 
-(create-hosted-zone :name "example.com.")
+(create-hosted-zone :name "example69.com"
+                    :caller-reference (str (java.util.UUID/randomUUID)))
 
 (get-hosted-zone :id "Z3TKY0VR5CH45U")
 

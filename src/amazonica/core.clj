@@ -43,7 +43,11 @@
 
 (defonce ^:private credential (atom {}))
 
+(defonce ^:private client-config (atom {}))
+
 (def ^:dynamic ^:private *credentials* nil)
+
+(def ^:dynamic ^:private *client-config* nil)
 
 (def ^:dynamic ^:private *client-class* nil)
 
@@ -122,6 +126,12 @@
   ([access-key secret-key & [endpoint]]
    (defcredential (keys->cred access-key secret-key endpoint))))
 
+(defn defclientconfig
+  "Specify the default Client configuration to use on
+  subsequent requests."
+  [config]
+  (reset! client-config config))
+
 (defmacro with-credential
   "Per invocation binding of credentials for ad-hoc
   service calls using alternate user/password combos
@@ -133,6 +143,13 @@
                  (apply keys->cred cred#)
                  cred#))]
     (do ~@body)))
+
+(defmacro with-client-config
+  "Per invocation binding of client-config for ad-hoc
+  service calls using alternate client configuration."
+  [config & body]
+  `(binding [*client-config* config]
+     (do ~@body)))
 
 (declare new-instance)
 
@@ -195,6 +212,24 @@
   (when (associative? configuration)
     (create-bean ClientConfiguration configuration)))
 
+(defn- set-endpoint!
+  [client credentials]
+  (when-let [endpoint (or (:endpoint credentials)
+                          (System/getenv "AWS_DEFAULT_REGION"))]
+    (if (contains? (fmap #(-> % str/upper-case (str/replace "_" ""))
+                         (apply hash-set (seq (Regions/values))))
+                   (-> (str/upper-case endpoint)
+                       (str/replace "-" "")))
+        (try
+          (->> (-> (str/upper-case endpoint)
+                   (str/replace "-" "_"))
+               Regions/valueOf
+               Region/getRegion
+               (.setRegion client))
+          (catch NoSuchMethodException e
+            (println e)))
+        (.setEndpoint client endpoint))))
+
 (defn- encryption-client*
   [encryption credentials configuration]
   (let [creds     (get-credentials credentials)
@@ -203,33 +238,21 @@
                       (:key-pair encryption))
         crypto    (CryptoConfiguration.)
         em        (EncryptionMaterials. key)
-        materials (StaticEncryptionMaterialsProvider. em)]
-    (if-let [provider (:provider encryption)]
-        (.withCryptoProvider crypto provider))
-    (if config
-      (AmazonS3EncryptionClient. creds materials config crypto)
-      (AmazonS3EncryptionClient. creds materials crypto))))
+        materials (StaticEncryptionMaterialsProvider. em)
+        _         (if-let [provider (:provider encryption)]
+                    (.withCryptoProvider crypto provider))
+        client    (if config
+                      (AmazonS3EncryptionClient. creds materials config crypto)
+                      (AmazonS3EncryptionClient. creds materials crypto))]
+    (set-endpoint! client credentials)
+    client))
 
 (defn- amazon-client*
   [clazz credentials configuration]
   (let [aws-creds  (get-credentials credentials)
         aws-config (get-client-configuration configuration)
         client     (create-client clazz aws-creds aws-config)]
-    (when-let [endpoint (or (:endpoint credentials)
-                            (System/getenv "AWS_DEFAULT_REGION"))]
-      (if (contains? (fmap #(-> % str/upper-case (str/replace "_" ""))
-                           (apply hash-set (seq (Regions/values))))
-                     (-> (str/upper-case endpoint)
-                         (str/replace "-" "")))
-          (try
-            (->> (-> (str/upper-case endpoint)
-                     (str/replace "-" "_"))
-                 Regions/valueOf
-                 Region/getRegion
-                 (.setRegion client))
-            (catch NoSuchMethodException e
-              (println e)))
-          (.setEndpoint client endpoint)))
+    (set-endpoint! client credentials)
     client))
 
 (def ^:private encryption-client
@@ -319,21 +342,22 @@
   (swap! coercions merge coercion))
 
 (defn coerce-value
-  "Coerces the supplied value to the required type as
-  defined by the AWS method signature. String conversion
-  to Enum types (e.g. via valueOf()) is supported."
+  "Coerces the supplied stringvalue to the required type as
+  defined by the AWS method signature. String or keyword 
+  conversion to Enum types (e.g. via valueOf()) is supported."
   [value type]
-  (if-not (instance? type value)
-    (if (= java.lang.Enum (.getSuperclass type))
-      (to-enum type value)
-      (if-let [coercion (@coercions (if (.isPrimitive type)
-                                      (str type)
-                                      type))]
-        (coercion value)
-        (throw (IllegalArgumentException.
-                 (format "No coercion is available to turn %s into an object of type %s"
-                         value type)))))
-    value))
+  (let [value (if (keyword? value) (name value) value)]
+    (if-not (instance? type value)
+      (if (= java.lang.Enum (.getSuperclass type))
+        (to-enum type value)
+        (if-let [coercion (@coercions (if (.isPrimitive type)
+                                        (str type)
+                                        type))]
+          (coercion value)
+          (throw (IllegalArgumentException.
+                   (format "No coercion is available to turn %s into an object of type %s"
+                           value type)))))
+      value)))
 
 (defn- default-value
   [class-name]
@@ -705,6 +729,7 @@
                    (map? (first args)))
                (or (contains? (first args) :access-key)
                    (contains? (first args) :endpoint)
+                   (contains? (first args) :profile)
                    (contains? (first args) :client-config)))
           (instance? AWSCredentialsProvider (first args))
           (instance? AWSCredentials (first args)))
@@ -733,10 +758,12 @@
 
 (defn- candidate-client
   [clazz args]
-  (let [credential (if (map? (:credential args))
-                             (merge @credential (:credential args))
-                             (or (:credential args) @credential))
-        client-config (:client-config args)
+  (let [cred-bound (or *credentials* (:credential args))
+        credential (if (map? cred-bound)
+                             (merge @credential cred-bound)
+                             (or cred-bound @credential))
+        config-bound (or *client-config* (:client-config args))
+        client-config (merge @client-config config-bound)
         crypto (if (even? (count (:args args)))
                    (:encryption (apply hash-map (:args args))))
         client  (if (and crypto (or (= clazz AmazonS3Client)
@@ -759,10 +786,7 @@
           client  (delay (candidate-client clazz args))]
       (fn []
         (try
-          (let [c (if (thread-bound? #'*credentials*)
-                      (candidate-client clazz (assoc args :credential *credentials*))
-                      @client)
-                java (.invoke method c arg-arr)
+          (let [java (.invoke method @client arg-arr)
                 cloj (marshall java)]
             (if (and
                   @root-unwrapping
@@ -780,28 +804,48 @@
              (every? identity (map instance? types args)))
         method)))
 
+(defn- coercible? [type]
+  (and (contains? @coercions type)
+       (not (re-find #"java\.lang" (str type)))))
+
+(defn- choose-from [possible]
+  (if (= 1 (count possible))
+      (first possible)
+      (first
+        (sort-by
+          (fn [method]
+            (let [types (.getParameterTypes method)]
+              (cond
+                (some coercible? types) 1
+                (some #(= java.lang.Enum (.getSuperclass %)) types) 2
+                :else 3)))
+          possible))))
+
+(defn possible-methods
+  [methods args]
+  (filter
+    (fn [method]
+      (let [types (.getParameterTypes method)
+            num   (count types)]
+        (if (or
+              (and (empty? args) (= 0 num))
+              (use-aws-request-bean? method args)
+              (and
+                (= num (count args))
+                (not (keyword? (first args)))
+                (not (aws-package? (first types)))))
+          method
+          false)))
+    methods))
+
 (defn- best-method
   "Finds the appropriate method to invoke in cases where
   the Amazon*Client has overloaded methods by arity or type."
   [methods & arg]
   (let [args (:args (args-from arg))
         methods (filter #(not (Modifier/isPrivate (.getModifiers %))) methods)]
-    (if-let [m (some (partial types-match-args args) methods)]
-      m
-      (some
-        (fn [method]
-          (let [types (.getParameterTypes method)
-                num   (count types)]
-            (if (or
-                  (and (empty? args) (= 0 num))
-                  (use-aws-request-bean? method args)
-                  (and
-                    (= num (count args))
-                    (not (keyword? (first args)))
-                    (not (aws-package? (first types)))))
-              method
-              false)))
-        methods))))
+    (or (some (partial types-match-args args) methods)
+        (choose-from (possible-methods methods args)))))
 
 (defn intern-function
   "Interns into ns, the symbol mapped to a Clojure function

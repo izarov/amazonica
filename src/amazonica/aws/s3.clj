@@ -15,6 +15,7 @@
               Grantee
               GroupGrantee
               ObjectMetadata
+              Owner
               Permission
               S3Object]))
 
@@ -87,7 +88,12 @@
       om))
   AccessControlList
   (fn [col]
-    (let [acl (AccessControlList.)]
+    (let [acl   (AccessControlList.)
+          s3ns  (find-ns (symbol "amazonica.aws.s3"))
+          sym   (symbol "get-s3account-owner")
+          own   (delay (ns-resolve s3ns sym))
+          owner #(coerce-value (marshall (@own)) Owner)]
+          ;; get-s3account-owner is not interned until runtime
       (if-let [revoked (:revoke-all-permissions col)]
         (.revokeAllPermissions acl
           (coerce-value revoked Grantee)))
@@ -101,6 +107,10 @@
           acl
           (coerce-value (first grant) Grantee)
           (coerce-value (second grant) Permission)))
+      ;; s3 complains about ACLs without owners (even though docs say internal)
+      (if-let [o (:owner col)]
+        (.setOwner acl (coerce-value o Owner))
+        (.setOwner acl (owner)))
       acl))
   Grant
   (fn [value]
@@ -120,6 +130,9 @@
       (EmailAddressGrantee. value)
       true
       (CanonicalGrantee. value)))
+  Owner
+  (fn [col]
+    (Owner. (:id col) (:displayName col)))
   Permission
   (fn [value]
     (Permission/valueOf value))
