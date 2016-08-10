@@ -1,5 +1,7 @@
 (ns amazonica.test.s3
   (:import com.amazonaws.auth.DefaultAWSCredentialsProviderChain
+           com.amazonaws.services.s3.model.CORSRule
+           com.amazonaws.services.s3.model.ObjectListing
            org.joda.time.DateTime
            java.io.BufferedInputStream
            java.io.File
@@ -11,6 +13,7 @@
            java.security.SecureRandom)
   (:require [clojure.string :as str])
   (:use [clojure.test]
+        [clojure.set]
         [clojure.pprint]
         [amazonica.core]
         [amazonica.aws.s3]))
@@ -72,8 +75,8 @@
   (list-buckets)
   
   (defcredential (:access-key cred)
-                    (:secret-key cred)
-                    (:endpoint cred))
+                 (:secret-key cred)
+                 (:endpoint cred))
   
   (list-buckets)
   
@@ -391,4 +394,27 @@
   (if (.exists download-file)
     (.delete download-file))
 
+   
+  ;; test for marshalling map values 
+  ;; see https://github.com/mcohen01/amazonica/issues/219
+  (let [pojo (CORSRule.)]
+    (amazonica.core/set-fields pojo {:allowed-headers ["foo" "bar" "baz"]})
+    (is (= ["foo" "bar" "baz"]
+           (.getAllowedHeaders pojo))))
+  
+  (let [pojo (ObjectListing.)]
+    (amazonica.core/set-fields pojo {:common-prefixes ["foo" "bar" "baz"]})
+    (is (= ["foo" "bar" "baz"]
+           (.getCommonPrefixes pojo))))
+
 )
+
+(deftest email-test []
+  (are [x] (= x (re-find email-pattern x))
+    "foo@bar.com"
+    "foo@bar.co.jp")
+  (are [x] (nil? (re-find email-pattern x))
+    "foo"
+    "foo@"
+    "foo@bar"
+    "foo@bao.c"))

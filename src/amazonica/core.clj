@@ -12,21 +12,10 @@
              BasicAWSCredentials
              BasicSessionCredentials
              DefaultAWSCredentialsProviderChain]
-           [com.amazonaws.auth.profile
-             ProfileCredentialsProvider]
+           com.amazonaws.auth.profile.ProfileCredentialsProvider
            [com.amazonaws.regions
              Region
              Regions]
-           com.amazonaws.services.cloudsearchdomain.AmazonCloudSearchDomainClient
-           com.amazonaws.services.lambda.AWSLambdaClient
-           [com.amazonaws.services.s3
-             AmazonS3Client
-             AmazonS3EncryptionClient]
-           [com.amazonaws.services.s3.model
-             CryptoConfiguration
-             EncryptionMaterials
-             StaticEncryptionMaterialsProvider]
-           com.amazonaws.services.s3.transfer.TransferManager
            org.joda.time.DateTime
            org.joda.time.base.AbstractInstant
            java.io.File
@@ -37,6 +26,7 @@
            java.lang.reflect.Modifier
            java.math.BigDecimal
            java.math.BigInteger
+           java.nio.ByteBuffer
            java.text.ParsePosition
            java.text.SimpleDateFormat
            java.util.Date))
@@ -54,6 +44,12 @@
 (def ^:private date-format (atom "yyyy-MM-dd"))
 
 (def ^:private root-unwrapping (atom false))
+
+(defn- invoke-constructor
+  [class-name arg-vec]
+  (Reflector/invokeConstructor
+    (Class/forName class-name)
+    (into-array Object arg-vec)))
 
 (defn set-root-unwrapping!
   "Enables JSON-like root unwrapping of singly keyed
@@ -102,8 +98,10 @@
 
 ; Java methods on the AWS*Client class which won't be exposed
 (def ^:private excluded
-  #{:invoke
-    :init
+  #{:anonymous-invoke
+    :do-invoke
+    :invoke
+    :init    
     :set-endpoint
     :get-cached-response-metadata
     :get-service-abbreviation})
@@ -154,19 +152,20 @@
 (declare new-instance)
 
 (defn- create-client
-  [aws-client credentials configuration]
+  [clazz credentials configuration]
   (if (every? nil? [credentials configuration])
-    (new-instance aws-client)
-    ; TransferManager is the only client to date that doesn't
-    ; accept AWSCredentialsProviders
-    (if (= aws-client TransferManager)
-        (TransferManager. (create-client AmazonS3Client
-                                         credentials
-                                         configuration))
-        (Reflector/invokeConstructor aws-client
-                                     (into-array Object
-                                                 (filter (comp not nil?)
-                                                         [credentials configuration]))))))
+    (new-instance (Class/forName clazz))
+    ; TransferManager is the only client to date that doesn't accept AWSCredentialsProviders
+    (if (= (.getSimpleName clazz) "TransferManager")
+        (invoke-constructor
+          "com.amazonaws.services.s3.transfer.TransferManager"
+          [(create-client (Class/forName "com.amazonaws.services.s3.AmazonS3Client")
+                          credentials
+                          configuration)])
+        (invoke-constructor (.getName clazz)
+                            (->> [credentials configuration]
+                                 (filter (comp not nil?))
+                                 vec)))))
 
 (defn get-credentials
   [credentials]
@@ -236,14 +235,23 @@
         config    (get-client-configuration configuration)
         key       (or (:secret-key encryption)
                       (:key-pair encryption))
-        crypto    (CryptoConfiguration.)
-        em        (EncryptionMaterials. key)
-        materials (StaticEncryptionMaterialsProvider. em)
+        crypto    (invoke-constructor
+                    "com.amazonaws.services.s3.model.CryptoConfiguration" [])
+        em        (invoke-constructor
+                    "com.amazonaws.services.s3.model.EncryptionMaterials"
+                    [key])
+        materials (invoke-constructor
+                    "com.amazonaws.services.s3.model.StaticEncryptionMaterialsProvider"
+                    [em])
         _         (if-let [provider (:provider encryption)]
                     (.withCryptoProvider crypto provider))
         client    (if config
-                      (AmazonS3EncryptionClient. creds materials config crypto)
-                      (AmazonS3EncryptionClient. creds materials crypto))]
+                      (invoke-constructor
+                        "com.amazonaws.services.s3.AmazonS3EncryptionClient"
+                        [creds materials config crypto])
+                      (invoke-constructor
+                        "com.amazonaws.services.s3.AmazonS3EncryptionClient"
+                        [creds materials crypto]))]
     (set-endpoint! client credentials)
     client))
 
@@ -317,22 +325,31 @@
         (.invoke type (make-array Object 0)))))
 
 ; assoc java Class to Clojure cast functions
-(defonce ^:private coercions (atom
-  {String     str
-   Integer    int
-   Long       long
-   Boolean    boolean
-   Double     double
-   Float      float
-   BigDecimal bigdec
-   BigInteger bigint
-   Date       to-date
-   File       to-file
-   "int"      int
-   "long"     long
-   "double"   double
-   "float"    float
-   "boolean"  boolean}))
+(defonce ^:private coercions 
+  (->> [:String :Integer :Long :Double :Float]
+       (reduce
+         (fn [m e]
+           (let [arr (str "[Ljava.lang." (name e) ";")
+                 clazz (Class/forName arr)]
+             (assoc m clazz into-array))) {})
+       (merge {
+         String     str
+         Integer    int
+         Long       long
+         Boolean    boolean
+         Double     double
+         Float      float
+         BigDecimal bigdec
+         BigInteger bigint
+         Date       to-date
+         File       to-file
+         ByteBuffer #(-> % str .getBytes ByteBuffer/wrap)
+         "int"      int
+         "long"     long
+         "double"   double
+         "float"    float
+         "boolean"  boolean})
+       atom))
 
 (defn register-coercions
   "Accepts key/value pairs of class/function, which defines
@@ -382,6 +399,7 @@
 (defn best-constructor
   "Prefer no-arg ctor if one exists, else the first found."
   [clazz]
+  {:pre [clazz]}
   (let [ctors (.getConstructors clazz)]
     (or
       (some
@@ -399,6 +417,7 @@
   the check for contructor args here, as the rest of the
   AWS api contains strictly no-arg ctor JavaBeans."
   [clazz]
+  {:pre [clazz]}
   (let [ctor (best-constructor clazz)
         arr  (constructor-args ctor)]
     (.newInstance ctor arr)))
@@ -406,18 +425,22 @@
 (defn- unwind-types
   [depth param]
   (if (instance? ParameterizedType param)
-      (let [f (partial unwind-types (inc depth))]
-        (-> param
-            (.getActualTypeArguments)
-            last
-            f))
+      (let [f (partial unwind-types (inc depth))
+            types (-> param .getActualTypeArguments)
+            t (-> types last f)]
+        (if (and (instance? ParameterizedType (last types))
+                 (.contains (-> types last str) "java.util")
+                 (.contains (-> types last str) "java.lang"))
+          {:type [(-> types last .getRawType)]
+           :depth depth}
+          t))
       {:type [param]
        :depth depth}))
 
 (defn- paramter-types
   [method]
   (let [types (seq (.getGenericParameterTypes method))
-        param (first types)
+        param (last types)
         rval  {:generic types}]
     (if (instance? ParameterizedType param)
         (let [t (unwind-types 1 param)]
@@ -493,7 +516,8 @@
     (into-array
       ;; misbehaving S3Client mutates the coll
       (if (and (coll? v)
-            (= AmazonS3Client *client-class*))
+               (not (nil? *client-class*))
+               (= "AmazonS3Client" (.getSimpleName *client-class*)))
         (if (and (> (count (.getParameterTypes method)) 1)
                  (sequential? v))
           (to-java-coll v)
@@ -509,6 +533,7 @@
 (defn- populate
   [types key props]
   (let [type (-> types key last)]
+    (assert type (str "Bad data type - there is no " key " in " types))
     (if (contains? @coercions type)
       (coerce-value props type)
       (set-fields (new-instance type) props))))
@@ -519,28 +544,36 @@
   (let [type (last (or (:actual types)
                        (:generic types)))
         pp   (partial populate types :actual)]
-    (if (aws-package? type)
-        (if (map? col)
-            (if (contains? types :actual)
-                (if (< (:depth types) 3)
-                    (apply assoc {}
-                           (interleave (fmap kw->str (apply vector (keys col)))
-                                       (fmap pp (apply vector (vals col)))))
-                    (apply assoc {}
-                           (interleave (fmap kw->str (apply vector (keys col)))
-                                       [(fmap #(populate {:generic [type]}
-                                                              :generic
-                                                              %)
-                                                  (first (apply vector (vals col))))])))
-                (populate types :generic col))
-            (if (and (contains? types :actual)
-                     (= (:depth types) 3))
-                (fmap #(fmap pp %) col)
-                (fmap pp col)))
-        (if (and (contains? types :actual)
-                 (aws-package? type))
-            (fmap pp col)
-            (fmap #(coerce-value % type) col)))))
+    (try
+      (if (aws-package? type)
+       (if (map? col)
+         (if (contains? types :actual)
+           (if (< (:depth types) 3)
+             (apply assoc {}
+                    (interleave (fmap kw->str (apply vector (keys col)))
+                                (fmap pp (apply vector (vals col)))))
+             (apply assoc {}
+                    (interleave (fmap kw->str (apply vector (keys col)))
+                                [(fmap #(populate {:generic [type]}
+                                                  :generic
+                                                  %)
+                                       (first (apply vector (vals col))))])))
+           (populate types :generic col))
+         (if (and (contains? types :actual)
+                  (= (:depth types) 3))
+           (fmap #(fmap pp %) col)
+           (fmap pp col)))
+       (if (and (contains? types :actual)
+                (aws-package? type))
+         (fmap pp col)
+         (fmap #(coerce-value % type) col)))
+      (catch Throwable e
+        (throw (RuntimeException. (str
+                                    "Failed to create an instance of "
+                                    (.getName type)
+                                    " from " col
+                                    " due to " e
+                                    ". Make sure the data matches an existing constructor and setters.")))))))
 
 (defn- invoke-method
   [pojo v method]
@@ -562,8 +595,14 @@
    to the corresponding method calls on the object graph."
   [pojo args]
   (doseq [[k v] args]
-    (->> (find-methods pojo k v)
-         (some (partial invoke-method pojo v))))
+    (try
+      (->> (find-methods pojo k v)
+           (some (partial invoke-method pojo v)))
+      (catch Throwable e
+        (throw (ex-info
+                 (str "Error setting " k ": " (.getMessage e) ". Perhaps the value isn't compatible with the setter?")
+                 {:property k, :value v}
+                 e)))))
   pojo)
 
 (defn- create-bean
@@ -595,7 +634,9 @@
   [method]
   (let [name (.getName method)
         type (.getName (.getReturnType method))]
-    (or (.startsWith name "get")
+    (or (and
+          (.startsWith name "get")
+          (= 0 (count (.getParameterTypes method))))
         (and
           (.startsWith name "is")
           (= "boolean" type)))))
@@ -749,9 +790,13 @@
 
 (defn- transfer-manager*
   [credential client-config crypto]
-  (TransferManager. (if crypto
-                      (encryption-client crypto credential client-config)
-                      (amazon-client AmazonS3Client credential client-config))))
+  (invoke-constructor
+    "com.amazonaws.services.s3.transfer.TransferManager"
+    (if crypto
+        [(encryption-client crypto credential client-config)]
+        [(amazon-client (Class/forName "com.amazonaws.services.s3.AmazonS3Client")
+                        credential
+                        client-config)])))
 
 (def ^:private transfer-manager
   (memoize transfer-manager*))
@@ -766,11 +811,11 @@
         client-config (merge @client-config config-bound)
         crypto (if (even? (count (:args args)))
                    (:encryption (apply hash-map (:args args))))
-        client  (if (and crypto (or (= clazz AmazonS3Client)
-                                    (= clazz TransferManager)))
+        client  (if (and crypto (or (= (.getSimpleName clazz) "AmazonS3Client")
+                                    (= (.getSimpleName clazz) "TransferManager")))
                     (delay (encryption-client crypto credential client-config))
                     (delay (amazon-client clazz credential client-config)))]
-        (if (= clazz TransferManager)
+        (if (= (.getSimpleName clazz) "TransferManager")
             (transfer-manager credential client-config crypto)
             @client)))
         
@@ -872,8 +917,8 @@
     (fn [col method]
       (let [fname (camel->keyword (.getName method))]
         (if (and (contains? excluded fname)
-                 (not= client AWSLambdaClient)
-                 (not= client AmazonCloudSearchDomainClient))
+                 (not= (.getSimpleName client) "AWSLambdaClient")
+                 (not= (.getSimpleName client) "AmazonCloudSearchDomainClient"))
             col
             (if (contains? col fname)
                 (update-in col [fname] conj method)
@@ -881,9 +926,17 @@
     {}
     (.getDeclaredMethods client)))
 
+(defn- show-functions [ns]
+  (intern ns (symbol "show-functions")
+    (fn []
+      (->> (ns-publics ns)
+           sort
+           (map (comp println first))))))
+
 (defn set-client
   "Intern into the specified namespace all public methods
    from the Amazon*Client class as Clojure functions."
   [client ns]
+  ;(show-functions ns)
   (doseq [[k v] (client-methods client)]
     (intern-function client ns k v)))

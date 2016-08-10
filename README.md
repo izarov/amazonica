@@ -7,7 +7,7 @@ A comprehensive Clojure client for the entire [Amazon AWS api] [1].
 
 Leiningen coordinates:
 ```clj
-[amazonica "0.3.34"]
+[amazonica "0.3.73"]
 ```
 
 For Maven users:
@@ -26,17 +26,19 @@ and the following dependency:
 <dependency>
   <groupId>amazonica</groupId>
   <artifactId>amazonica</artifactId>
-  <version>0.3.34</version>
+  <version>0.3.73</version>
 </dependency>
 ```
 
 ## Supported Services
+* Api Gateway
 * [Autoscaling] (#autoscaling)
 * [CloudFormation] (#cloudformation)
 * [CloudFront] (#cloudfront)
 * [CloudSearch] (#cloudsearch)
 * [CloudSearchV2] (#cloudsearchv2)
 * [CloudWatch] (#cloudwatch)
+* [CloudWatchEvents] (#cloudwatchevents)
 * CodeCommit
 * [CodeDeploy] (#codedeploy)
 * CodePipeline
@@ -47,16 +49,22 @@ and the following dependency:
 * Directory
 * [DynamoDBV2] (#dynamodbv2)
 * [EC2] (#ec2)
+* [ECR] (#ecr)
 * [ECS] (#ecs)
 * [ElastiCache] (#elasticache)
 * [ElasticBeanstalk] (#elasticbeanstalk)
 * ElasticFileSystem
 * [ElasticLoadBalancing] (#elasticloadbalancing)
 * [ElasticMapReduce] (#elasticmapreduce)
+* [Elasticsearch] (#elasticsearch)
+* [ElasticTranscoder] (#elastictranscoder)
 * [Glacier] (#glacier)
 * [IdentityManagement] (#identitymanagement)
+* [IoT] (#iot)
 * [Kinesis] (#kinesis)
+* [KinesisFirehose] (#kinesisfirehose)
 * [KMS] (#kms)
+* [Logs] (#logs)
 * [Lambda] (#lambda)
 * MachineLearning
 * [OpsWorks] (#opsworks)
@@ -249,7 +257,7 @@ Note that either form will work. This allows contributors to the library to incr
 
 ### Authentication
 The default authentication scheme is to use the [chained Provider class] [15] from the AWS SDK, whereby authentication is attempted in the following order:
-- Environment Variables - AWS_ACCESS_KEY_ID and AWS_SECRET_KEY
+- Environment Variables - AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
 - Java System Properties - aws.accessKeyId and aws.secretKey
 - Credential profiles file at the default location (~/.aws/credentials) shared by all AWS SDKs and the AWS CLI
 - Instance profile credentials delivered through the Amazon EC2 metadata service
@@ -349,6 +357,18 @@ All functions throw `com.amazonaws.AmazonServiceExceptions`. If you wish to catc
 ;   at com.amazonaws.services.ec2.AmazonEC2Client.invoke(AmazonEC2Client.java:6199)
 ;   at com.amazonaws.services.ec2.AmazonEC2Client.createSnapshot(AmazonEC2Client.java:1531)
 ;   .....
+```
+
+
+#### For the memory constrained
+If you're especially concerned about the size of your uberjar, you can limit the transitive dependencies pulled in by the AWS Java SDK, which currently total 35mb. You'll need to exclude the entire AWS Java SDK and the Amazon Kinesis Client, and then add back only those services you'll be using (although core is always required). So for example, if you were only using S3, you could restrict the dependencies to only include the required jars like so:
+
+```clj
+:dependencies [[org.clojure/clojure "1.7.0"]
+               [amazonica "0.3.48" :exclusions [com.amazonaws/aws-java-sdk
+                                                com.amazonaws/amazon-kinesis-client]]
+               [com.amazonaws/aws-java-sdk-core "1.10.49"]
+               [com.amazonaws/aws-java-sdk-s3 "1.10.49"]]
 ```
 
 
@@ -505,6 +525,23 @@ To put metric data.   [UnitTypes](http://docs.aws.amazon.com/AmazonCloudWatch/la
                    :value 1.0}])
 ```
 
+###CloudWatchEvents
+```clj
+(ns com.example
+  (:use [amazonica.aws.cloudwatchevents]))
+
+(put-rule
+    :name "nightly-backup"
+    :description "Backup DB nightly at 10:00 UTC (2 AM or 3 AM Pacific)"
+    :schedule-expression "cron(0 10 * * ? *)")
+   
+(put-targets
+    :rule "nightly-backup"
+    :targets [{:id    "backup-lambda"
+               :arn   "arn:aws:lambda:us-east-1:123456789012:function:backup-lambda"
+               :input (json/write-str {"whatever" "arguments"})}])
+```
+    
 ###CodeDeploy
 ```clj
 (ns com.example
@@ -590,7 +627,8 @@ To put metric data.   [UnitTypes](http://docs.aws.amazon.com/AmazonCloudWatch/la
           :key {:id {:s "foo"}
                 :date {:n 123456}})
 
-(query :table-name "TestTable"
+(query cred
+       :table-name "TestTable"
        :limit 1
        :index-name "column1_idx"
        :select "ALL_ATTRIBUTES"
@@ -664,7 +702,7 @@ To put metric data.   [UnitTypes](http://docs.aws.amazon.com/AmazonCloudWatch/la
 
 ```clj
 (ns com.example
-  (:require [amazonica.aws.esc :refer :all]))
+  (:require [amazonica.aws.ecs :refer :all]))
 
 (register-task-definition
  {:family "grafana2",
@@ -697,6 +735,22 @@ To put metric data.   [UnitTypes](http://docs.aws.amazon.com/AmazonCloudWatch/la
 (update-service :cluster "Amazonica" :service "grafana2" :desired-count 0)
 (delete-service :cluster "Amazonica" :service "grafana2")
 (delete-cluster :cluster "Amazonica")
+```
+
+###ECR
+
+```clj
+(require '[amazonica.aws.ecr :as ecr])
+
+(ecr/describe-repositories {})
+
+(ecr/create-repository :repository-name "amazonica")
+
+(ecr/get-authorization-token {})
+
+(ecr/list-images :repository-name "amazonica")
+
+(ecr/delete-repository :repository-name "amazonica")
 ```
 
 ###Elasticache
@@ -802,6 +856,47 @@ To put metric data.   [UnitTypes](http://docs.aws.amazon.com/AmazonCloudWatch/la
 ```
 
 
+###ElasticsearchService
+
+```clj
+(ns com.example
+  (:use [amazonica.awselasticsarch]))
+
+(list-domain-names {})
+```
+
+
+###ElasticTranscoder
+```clj
+(ns com.example
+(:use [amazonica.aws.elastictranscoder))
+
+(list-pipelines)
+;; -> {:pipelines []}
+
+(list-presets)
+;; -> {:presets [{:description "System preset generic 1080p", ....}]}
+
+;; status can be :Submitted :Progressing :Complete :Canceled :Error
+(list-jobs-by-status :status :Complete)
+;; -> ...
+
+(def new-pipeline-id (-> (create-pipeline
+                           :role "arn:aws:iam::289431957111:role/Elastic_Transcoder_Default_Role",
+                           :name "avi-to-mp4",
+                           :input-bucket "avi-to-convert",
+                           :output-bucket "converted-mp4")
+                       :pipeline
+                       :id))
+;; -> "1111111111111-11aa11"
+
+(create-job :pipeline-id "1111111111111-11aa11"
+            :input {:key "my/s3/input/obj/key.avi"}
+            :outputs [{:key "my/s3/output/obj/key.avi"
+                       :preset-id "1351620000001-000030"}
+```
+
+
 ###Glacier
 
 ```clj
@@ -842,6 +937,25 @@ To put metric data.   [UnitTypes](http://docs.aws.amazon.com/AmazonCloudWatch/la
 
 ```
 
+### IoT
+
+```clj
+(ns com.example
+  (:require [amazonica.aws.iot :refer :all]))
+
+(list-things {})
+;; => {:things [{:thing-name "YourThing"}]}
+
+(create-thing :thing-name "MyThing")
+;; => {:thing-name "MyThing" :thing-arn "arn:aws:iot:...thing/MyThing"}
+```
+
+```clj
+(ns com.example
+  (:require [amazonica.aws.iotdata :refer :all]))
+
+(get-thing-shadow :thing-name "MyThing")
+```
 
 ###Kinesis
 ```clj
@@ -929,6 +1043,51 @@ To put metric data.   [UnitTypes](http://docs.aws.amazon.com/AmazonCloudWatch/la
 
 ```
 
+###KinesisFirehose
+```clj
+(ns com.example
+  (:require [amazonica.aws.kinesisfirehose :as fh])
+  (:import [java.nio ByteBuffer]))
+
+;; List delivery streams
+(fh/list-delivery-streams)
+;; => {:delivery-stream-names ("test-firehose" "test-firehose-2"), :has-more-delivery-streams false}
+
+(fh/describe-delivery-stream :delivery-stream-name "my-test-firehose")
+;; => {:delivery-stream-description
+;;       {:version-id "2", ....}}
+
+(fh/create-delivery-stream :delivery-stream-name "my-test-firehose-2"
+                           :s3DestinationConfiguration {:role-arn  "arn:aws:iam:xxxx:role/firehose_delivery_role",
+                                                        :bucket-arn "arn:aws:s3:::my-test-bucket"})
+;; => {:delivery-stream-arn "arn:aws:firehose:us-west-2:xxxxx:deliverystream/my-test-firehose-2"}
+
+;; Describe delivery stream
+(fh/describe-delivery-stream cred :delivery-stream-name stream-name)
+
+;; Update destination
+(fh/update-destination cred {:current-delivery-stream-version-id version-id
+                             :delivery-stream-name stream-name
+                             :destination-id destination-id
+                             :s3-destination-update {:BucketARN (str "arn:aws:s3:::" new-bucket-name)
+                                                     :BufferingHints {:IntervalInSeconds 300
+                                                                      :SizeInMBs 5}
+	                                                 :CompressionFormat "UNCOMPRESSED"
+                                                     :EncryptionConfiguration {:NoEncryptionConfig "NoEncryption"}
+                                                     :Prefix "string"
+                                                     :RoleARN "arn:aws:iam::123456789012:role/firehose_delivery_role"}})
+
+;; Put batch of records to stream. Records are converted to instances of ByteBuffer if possible. Sequences are converted to CSV formatted strings for injestion into RedShift.
+(fh/put-record-batch cred stream-name [[1 2 3 4] ["test" 2 3 4] "\"test\",2,3,4" (ByteBuffer. (.getBytes "test,2,3,4"))])
+
+;; Put individual record to stream.
+(fh/put-record stream-name "test")
+
+;; Delete delivery stream
+(fh/delete-delivery-stream "stream-name")
+
+```
+
 ### KMS
 
 ```clj
@@ -942,6 +1101,15 @@ To put metric data.   [UnitTypes](http://docs.aws.amazon.com/AmazonCloudWatch/la
 (disable-key "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
 ```
 
+###Logs
+```clj
+(ns com.example
+  (:use [amazonica.aws.logs]))
+
+(describe-log-streams :log-group-name "my-log-group"
+                      :order-by "LastEventTime"
+                      :descending true)
+```
 
 ###Lambda
 ```clj
@@ -957,8 +1125,8 @@ To put metric data.   [UnitTypes](http://docs.aws.amazon.com/AmazonCloudWatch/la
                 }"]
   (create-function :role role :function handler))
 
-(invoke-async :function-name "helloWorld"
-              :invoke-args "{\"key1\": 1, \"key2\": 2, \"key3\": 3}")
+(invoke :function-name "helloWorld"
+        :payload "{\"key1\": 1, \"key2\": 2, \"key3\": 3}")
 
 ```
 
@@ -1095,6 +1263,8 @@ To put metric data.   [UnitTypes](http://docs.aws.amazon.com/AmazonCloudWatch/la
             :encryption {:key-pair key-pair}
             :key "foo")))))
 
+;; get tags for the bucket
+(get-bucket-tagging-configuration {:bucket-name bucket})
 
 ;; put object from stream
 (def some-bytes (.getBytes "Amazonica" "UTF-8"))
@@ -1140,6 +1310,25 @@ To put metric data.   [UnitTypes](http://docs.aws.amazon.com/AmazonCloudWatch/la
   :bucket-name bucket-name
   :configuration {
     :index-document-suffix "index.html"})
+
+(s3/set-bucket-notification-configuration
+  :bucket-name "my.bucket.name"
+  :notification-configuration
+    {:configurations 
+      {:some-config-name
+        {:queue "arn:aws:sqs:eu-west-1:123456789012:my-sqs-queue-name"
+         :events #{"ObjectCreatedByPut" "ObjectCreated"}
+         ;; list of key value pairs as maps or nexted 2 element list
+         :filter [{"foo" "bar"}
+                  {:baz "quux"}
+                  ["key" "value"]]}}})
+
+
+(s3/set-bucket-tagging-configuration
+   :bucket-name "my.bucket.name"
+   :tagging-configuration
+     {:tag-sets [{:Formation "notlive" :foo "bar" :baz "quux"}]})
+
 
 ```
 
@@ -1225,13 +1414,24 @@ To put metric data.   [UnitTypes](http://docs.aws.amazon.com/AmazonCloudWatch/la
 (subscribe :protocol "email"
            :topic-arn "arn:aws:sns:us-east-1:676820690883:my-topic"
            :endpoint "mcohen01@gmail.com")
+           
+(subscribe :protocol "lambda"
+           :topic-arn "arn:aws:sns:us-east-1:676820690883:my-topic"
+           :endpoint "arn:aws:lambda:us-east-1:676820690883:function:my-function")
+
+;; provide endpoint in creds for topics in non-default region
+(subscribe {:endpoint "eu-west-1"}
+	   :protocol "lambda"
+           :topic-arn "arn:aws:sns:eu-west-1:676820690883:my-topic"
+           :endpoint "arn:aws:lambda:us-east-1:676820690883:function:my-function")
 
 (clojure.pprint/pprint
   (list-subscriptions))
 
 (publish :topic-arn "arn:aws:sns:us-east-1:676820690883:my-topic"
          :subject "test"
-         :message (str "Todays is " (java.util.Date.)))
+         :message (str "Todays is " (java.util.Date.))
+         :message-attributes {"attr" "value"})
 
 (unsubscribe :subscription-arn "arn:aws:sns:us-east-1:676820690883:my-topic:33fb2721-b639-419f-9cc3-b4adec0f4eda")
 
