@@ -206,7 +206,7 @@
 
 (declare create-bean)
 
-(defn- get-client-configuration
+(defn get-client-configuration
   [configuration]
   (when (associative? configuration)
     (create-bean ClientConfiguration configuration)))
